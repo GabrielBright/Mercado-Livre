@@ -6,10 +6,17 @@ import re
 import pandas as pd
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
-URL_INICIAL = "https://lista.mercadolivre.com.br/veiculos/onibus/_YearRange_2002-0_NoIndex_True"
 LIMITE_TOTAL = 3566
 ARQUIVO_XLSX = "links_ml.xlsx"
 ARQUIVO_CSV  = "links_ml.csv"
+
+START_URLS = [
+    "https://lista.mercadolivre.com.br/veiculos/onibus/_YearRange_2002-0_NoIndex_True",
+    "https://lista.mercadolivre.com.br/veiculos/onibus-em-sao-paulo/_YearRange_2002-0_NoIndex_True",
+    "https://lista.mercadolivre.com.br/veiculos/onibus-em-parana/_YearRange_2002-0_NoIndex_True",
+    "https://lista.mercadolivre.com.br/veiculos/onibus-em-rio-grande-do-sul/_YearRange_2002-0_NoIndex_True",
+    "https://lista.mercadolivre.com.br/veiculos/onibus-em-minas-gerais/_YearRange_2002-0_NoIndex_True",
+]
 
 # Login persistente
 USE_LOGIN = True
@@ -77,38 +84,38 @@ async def scroll_to_bottom(page, steps=SCROLL_STEPS):
         await page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
         await asyncio.sleep(0.35)
 
-def construir_url_proxima(url_atual: str, coletados: int, por_pagina: int = ITENS_POR_PAGINA) -> str:
-    proximo_desde = coletados + 1  # 1-based
-    if "_Desde_" in url_atual:
-        return re.sub(r"_Desde_\d+", f"_Desde_{proximo_desde}", url_atual)
-    base, sep, resto = url_atual.partition("?")
-    nova_base = f"{base.rstrip('/')}_Desde_{proximo_desde}"
-    return f"{nova_base}{sep}{resto}" if sep else nova_base
+def construir_url_proxima(url_atual: str, cards_na_pagina: int, por_pagina: int = ITENS_POR_PAGINA) -> str:
+    m = re.search(r"_Desde_(\d+)", url_atual)
+    if m:
+        atual = int(m.group(1))
+        prox = atual + max(cards_na_pagina, 1)
+        return re.sub(r"_Desde_\d+", f"_Desde_{prox}", url_atual)
+    else:
+        inicio = max(cards_na_pagina + 1, por_pagina + 1) if cards_na_pagina >= por_pagina else cards_na_pagina + 1
+        base, sep, resto = url_atual.partition("?")
+        nova_base = f"{base.rstrip('/')}_Desde_{inicio}"
+        return f"{nova_base}{sep}{resto}" if sep else nova_base
 
 async def abrir_pagina_busca(page, url):
     for tent in range(1, RETRIES_PAGINA + 1):
         try:
             await page.goto(url, timeout=PAGE_TIMEOUT_MS, referer="https://www.mercadolivre.com.br/")
-            # se caiu em verificação, tente a listagem base de novo
             if "account-verification" in page.url or "/gz/" in page.url:
-                await page.goto(URL_INICIAL, timeout=PAGE_TIMEOUT_MS, referer="https://www.mercadolivre.com.br/")
+                await page.goto(url, timeout=PAGE_TIMEOUT_MS, referer="https://www.mercadolivre.com.br/")
             await esperar_resultados(page)
             return True
         except PWTimeout:
-            print(f"[WARN] Timeout ao carregar a busca ({tent}/{RETRIES_PAGINA})")
+            print(f"[WARN] Timeout ao carregar a busca ({tent}/{RETRIES_PAGINA}) | {url}")
             await asyncio.sleep(1.5 * tent)
     return False
 
-async def ir_para_proxima(page, total_coletados: int) -> bool:
+async def ir_para_proxima(page, total_coletados: int, cards_na_pagina: int) -> bool:
     for tent in range(1, RETRIES_NEXT + 1):
         try:
-            # rola até o rodapé para garantir que a paginação esteja visível
             await scroll_to_bottom(page)
 
-            # primeiro card antes da navegação (para detectar mudança real)
             first_before = await page.locator(SEL_CARD).first.get_attribute("href")
 
-            # tenta clicar no botão "próximo"
             next_a = page.locator(SEL_NEXT).first
             next_href = None
             try:
@@ -124,7 +131,6 @@ async def ir_para_proxima(page, total_coletados: int) -> bool:
                     await asyncio.sleep(0.35 * tent)
                     await next_a.click()
 
-                    # espera trocar de cards
                     await page.wait_for_function(
                         "(arg) => { const a = document.querySelector(arg.sel); return a && a.href && a.href !== arg.before; }",
                         arg={"sel": SEL_CARD, "before": first_before},
@@ -134,7 +140,6 @@ async def ir_para_proxima(page, total_coletados: int) -> bool:
                     await esperar_resultados(page)
                     return True
                 except PWTimeout:
-                    # se o clique não navegou, tenta ir pelo href do botão
                     try:
                         await page.goto(next_href, timeout=PAGE_TIMEOUT_MS, referer=page.url)
                         await asyncio.sleep(random.uniform(*PAGE_NAV_EXTRA_WAIT_S))
@@ -143,8 +148,8 @@ async def ir_para_proxima(page, total_coletados: int) -> bool:
                     except Exception as e:
                         print(f"[WARN] Falha ao navegar por href do próximo: {e}")
 
-            # se não havia botão ou falhou, tenta construir URL com _Desde_
-            url_fallback = construir_url_proxima(page.url, total_coletados, ITENS_POR_PAGINA)
+            # FALLBACK: usa offset baseado nos cards realmente exibidos nesta página
+            url_fallback = construir_url_proxima(page.url, cards_na_pagina, ITENS_POR_PAGINA)
             if url_fallback != page.url:
                 await page.goto(url_fallback, timeout=PAGE_TIMEOUT_MS, referer=page.url)
                 await page.wait_for_function(
@@ -161,10 +166,18 @@ async def ir_para_proxima(page, total_coletados: int) -> bool:
         except Exception as e:
             print(f"[WARN] Falha ao ir para próxima (tentativa {tent}/{RETRIES_NEXT}): {e}")
 
-        # backoff progressivo
         await asyncio.sleep(0.8 * tent)
 
     return False
+
+async def reopen_if_closed(page, context, fallback_url: str):
+    if page.is_closed():
+        new_page = await context.new_page()
+        ok = await abrir_pagina_busca(new_page, fallback_url)
+        if not ok:
+            raise RuntimeError(f"Falha ao reabrir listagem: {fallback_url}")
+        return new_page
+    return page
 
 async def main():
     # utilitário para salvar sessão
@@ -193,32 +206,68 @@ async def main():
         context.set_default_timeout(PAGE_TIMEOUT_MS)
 
         page = await context.new_page()
-        ok = await abrir_pagina_busca(page, URL_INICIAL)
-        if not ok:
-            print("[ERRO] Não consegui abrir a busca dentro do timeout.")
-            await context.close()
-            await browser.close()
-            return
 
-        pagina = 1
-        while len(links) < LIMITE_TOTAL:
-            print(f"\nPágina {pagina} — {len(links)}/{LIMITE_TOTAL} coletados")
-            novos = await coletar_links_pagina(page, links, LIMITE_TOTAL)
-            print(f"Novos nesta página: {novos}")
-
+        for seed_idx, seed_url in enumerate(START_URLS, start=1):
             if len(links) >= LIMITE_TOTAL:
                 break
 
-            tem_proxima = await ir_para_proxima(page, len(links))
-            if not tem_proxima:
-                print("Não há (ou não consegui abrir) a próxima página. Encerrando.")
-                break
+            print(f"\n=== Seed {seed_idx}/{len(START_URLS)} ===")
+            ok = await abrir_pagina_busca(page, seed_url)
+            if not ok:
+                print(f"[WARN] Não consegui abrir a seed: {seed_url}. Pulando.")
+                continue
 
-            pagina += 1
-            await asyncio.sleep(random.uniform(0.8, 1.6))
+            # guarda a última URL “saudável” da listagem
+            last_listing_url = page.url
 
-        await context.close()
-        await browser.close()
+            pagina = 1
+            while len(links) < LIMITE_TOTAL:
+                print(f"Seed {seed_idx} | Página {pagina} — {len(links)}/{LIMITE_TOTAL} coletados")
+
+                # --- contagem de cards com tolerância a fechamento ---
+                try:
+                    cards_count = await page.locator(SEL_CARD).count()
+                except Exception:
+                    # reabre e tenta de novo
+                    page = await reopen_if_closed(page, context, last_listing_url)
+                    cards_count = await page.locator(SEL_CARD).count()
+
+                # --- coleta links com tolerância a fechamento ---
+                try:
+                    novos = await coletar_links_pagina(page, links, LIMITE_TOTAL)
+                except Exception:
+                    page = await reopen_if_closed(page, context, last_listing_url)
+                    novos = await coletar_links_pagina(page, links, LIMITE_TOTAL)
+
+                print(f"Novos nesta página: {novos}")
+
+                if len(links) >= LIMITE_TOTAL:
+                    break
+
+                # fim desta seed?
+                if cards_count < ITENS_POR_PAGINA and novos == 0:
+                    print("Parece ser a última página desta seed.")
+                    break
+
+                # tenta ir para próxima; se a página fechar, reabre e continua
+                try:
+                    tem_proxima = await ir_para_proxima(page, len(links), cards_count)
+                except Exception:
+                    page = await reopen_if_closed(page, context, last_listing_url)
+                    tem_proxima = await ir_para_proxima(page, len(links), cards_count)
+
+                if not tem_proxima:
+                    print("Não há (ou não consegui abrir) a próxima página nesta seed.")
+                    break
+
+                # navegou com sucesso — atualiza a última URL “saudável”
+                last_listing_url = page.url
+
+                pagina += 1
+                await asyncio.sleep(random.uniform(0.8, 1.6))
+
+            await context.close()
+            await browser.close()
 
     # salvar resultados
     df = pd.DataFrame(sorted(links), columns=["Link"])

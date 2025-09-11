@@ -25,9 +25,9 @@ STORAGE_STATE = r"C:\Users\gabriel.vinicius\Documents\Vscode\MicroOnibus\ml_stat
 
 CHECKPOINT_EVERY = 150
 
-TIMEOUT_MS      = 90_000
-RETRIES_PAGE    = 3
-MAX_CONCURRENT  = 12 
+TIMEOUT_MS      = 40_000
+RETRIES_PAGE    = 2
+MAX_CONCURRENT  = 8 
 
 SELETORES_PRECO = [
     "#price > div > div > div > span > span",
