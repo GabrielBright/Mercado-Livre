@@ -4,7 +4,6 @@ import re
 import asyncio
 import logging
 import pandas as pd
-import unicodedata
 from tqdm import tqdm
 from time import time
 from typing import List, Dict, Any, Optional
@@ -26,7 +25,7 @@ STORAGE_STATE = r"C:\Users\gabriel.vinicius\Documents\Vscode\MicroOnibus\ml_stat
 
 CHECKPOINT_EVERY = 300
 
-TIMEOUT_MS      = 120_000
+TIMEOUT_MS      = 90_000
 RETRIES_PAGE    = 2
 MAX_CONCURRENT  = 8 
 
@@ -83,18 +82,6 @@ SEL_KM = [
     r"#\:R2jesraacde\:",       r"xpath=//*[@id=':R2jesraacde:']",
     r"#\:R2jesraacde\:-value", r"xpath=//*[@id=':R2jesraacde:-value']",
     r"#\:R2jesraacde\:",       r"xpath=//*[@id=':R2jesraacde:']",
-]
-
-SEL_TITLE = [
-    "h1.ui-pdp-title",
-    "h1[itemprop='name']",
-    "#header h1",
-    "xpath=//*[@id='header']//h1",
-]   
-
-SEL_HEADER_SUB = [
-    "#header > div > div.ui-pdp-header__subtitle > span",
-    "xpath=//*[@id='header']//div[contains(@class,'ui-pdp-header__subtitle')]//span",
 ]
 
 XPATH_POR_LABEL = {
@@ -187,24 +174,6 @@ def parse_km(txt: str) -> Optional[int]:
     except:
         pass
     return None
-
-def parse_ano_km_from_header(txt: str) -> tuple[Optional[int], Optional[int]]:
-    if not txt:
-        return None, None
-    s = re.sub(r"\s+", " ", txt).strip().lower()
-    # ano: 1950–2049
-    m_year = re.search(r"\b(19[5-9]\d|20[0-4]\d)\b", s)
-    ano = int(m_year.group(1)) if m_year else None
-    # km: número seguido de 'km'
-    m_km = re.search(r"(\d{1,3}(?:\.\d{3})*|\d+)\s*km\b", s)
-    km = None
-    if m_km:
-        n = m_km.group(1).replace(".", "").replace(",", "")
-        try:
-            km = int(n)
-        except:
-            km = None
-    return ano, km
 
 async def fechar_modal_atributos_acessibilidade(page):
     # 1) tenta ESC algumas vezes
@@ -317,53 +286,40 @@ async def scroll_until(page, selector_or_fn_js, timeout_ms=TIMEOUT_MS, step_px=8
         elapsed += pause_ms
     return False
 
-async def esperar_anuncio(page, timeout_ms=TIMEOUT_MS):
-    # fecha/ignora overlays e “Pular para o conteúdo”
-    await fechar_modal_atributos_acessibilidade(page)
-
-    # estado mínimo carregado
-    await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-
-    # espera título ou preço estar presente na árvore
-    await page.wait_for_selector(
-        "h1.ui-pdp-title, h1[itemprop='name'], meta[itemprop='price'], .ui-pdp-price",
-        timeout=timeout_ms
-    )
-
-    # dá uma respirada na rede (opcional, ajuda em SPA)
+async def esperar_anuncio(page):
     try:
-        await page.wait_for_load_state("networkidle", timeout=5_000)
-    except:
-        pass
+        await page.wait_for_load_state("domcontentloaded", timeout=TIMEOUT_MS)
+        await fechar_modal_atributos_acessibilidade(page)
 
-    # rola um pouco pra acionar lazy-load
-    for _ in range(3):
+        await page.wait_for_selector(
+            "h1.ui-pdp-title, h1[itemprop='name'], #price, .ui-pdp-price, meta[itemprop='price']",
+            timeout=TIMEOUT_MS
+        )
+
+        await scroll_stepwise(page, total_px=1600, step_px=800, pause_ms=350)
+        await page.wait_for_timeout(300)
+        await fechar_modal_atributos_acessibilidade(page) 
+
+        try:
+            caract = page.locator("h2:has-text('Características'), h3:has-text('Características')")
+            if await caract.count() > 0:
+                await caract.first.scroll_into_view_if_needed()
+                await page.wait_for_timeout(400)
+        except:
+            pass
+
+        await scroll_until(
+            page,
+            "( ) => !!(document.querySelector('.andes-money-amount__fraction')"
+            " || document.querySelector('table')"
+            " || document.querySelector('dl')"
+            " || document.querySelector('li:has(b), li:has(strong)'))",
+            timeout_ms=20_000, step_px=900, pause_ms=350
+        )
+    except PWTimeout:
+        # fallback mínimo
         await page.evaluate("window.scrollBy(0, 800)")
-        await page.wait_for_timeout(350)
-
-    # se houver, rola até “Características…”
-    try:
-        caract = page.locator("h2:has-text('Características'), h3:has-text('Características')")
-        if await caract.count() > 0:
-            await caract.first.scroll_into_view_if_needed()
-            await page.wait_for_timeout(400)
-    except:
-        pass
-
-    # aguarda a tabela de especificações ficar pronta (com linhas)
-    await page.wait_for_function(
-        """() => {
-            const tbl = document.querySelector('table.andes-table');
-            if (!tbl) return false;
-            const body = tbl.querySelector('tbody');
-            if (!body) return false;
-            return body.querySelectorAll('tr').length >= 3; // Marca/Modelo/Ano etc.
-        }""",
-        timeout=timeout_ms
-    )
-
-    # margem pro layout estabilizar
-    await page.wait_for_timeout(250)
+        await page.wait_for_timeout(1200)
         
 async def salvar_estado_login():
     async with async_playwright() as p:
@@ -384,88 +340,6 @@ async def salvar_estado_login():
         await context.storage_state(path=STORAGE_STATE)
         await browser.close()
         print(f"Estado salvo em: {STORAGE_STATE}")
-        
-BRANDS_OFFICIAL = [
-    "MARCOPOLO","MERCEDES-BENZ","VOLKSWAGEN","SCANIA","IVECO","VOLVO","RENAULT","FORD",
-    "CITROEN","JAC","AGRALE","INDUSCAR","BYD","LVTONG","HIGER","PEUGEOT","HYUNDAI",
-    "ANKAI","CHEVROLET","SR","MOTOR-CASA","MA" 
-]
-
-# Aliases comuns -> marca oficial
-BRAND_ALIASES = {
-    "MERCEDES BENZ": "MERCEDES-BENZ",
-    "MERCEDES": "MERCEDES-BENZ",
-    "MB": "MERCEDES-BENZ",
-    "VW": "VOLKSWAGEN",
-    "VOLKSBUS": "VOLKSWAGEN",
-}
-
-# Modelos conhecidos (normalizados, quanto mais melhor)
-KNOWN_MODELS = [
-    "VOLARE V8L","VOLARE ACCESS","VOLARE DW9","VOLARE W-L","VOLARE V9L","VOLARE W9C",
-    "VOLARE DV9L","VOLARE V6","VOLARE V10L","VOLARE MV8L","VOLARE W12","VOL 8L",
-    "VOLARE A5","VOLARE TCA","VOLARE CINCO","ATTIVI","SENIOR","APACHE","MILLENNIUM",
-    "COMIL","NEOBUS","BUSSCAR","ITALBUS","INDUSCAR","VETTURA","IRIZAR","E-VOLKSBUS",
-    "CITY CLASS","WAYCLASS","GCLASS","RONTAN","TAKO","TCA","S312","OF 1519","K380","K310",
-    "SPRINTER","MASTER","TRANSIT","DUCATO","BOXER","SCUDO","JUMPY","EXPERT","STARIA",
-    "DAILY 45","DAILY 50","DAILY 55","DAILY", "B7",
-    "IEV750","AZURE","EON","FE10","OE10","OE12","OE9","OE8","OE6","LT-S14.F",
-    "NIKS","GREENCAR","MARRUA","EUROHOME","MICROONIBUS","BUS","CAMINHAO","CAMINHONETE",
-    "ESPECIAL","ONIBUS","LO","MPOLO","MASCA","INDUSCAR","TAKO","TCA","NW"
-]
-# Deixe-os todos upper para matching
-KNOWN_MODELS = sorted(set(m.upper() for m in KNOWN_MODELS), key=len, reverse=True)
-BRANDS_OFFICIAL = sorted(set(BRANDS_OFFICIAL), key=len, reverse=True)
-
-def _norm(s: str) -> str:
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = re.sub(r"[^0-9A-Za-z\s\-\.\_/]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s.upper()
-
-def _find_brand(title_norm: str) -> Optional[str]:
-    # 1) tenta aliases
-    for alias, canon in BRAND_ALIASES.items():
-        if re.search(rf"\b{re.escape(alias)}\b", title_norm):
-            return canon
-    # 2) tenta marcas oficiais (maior primeiro)
-    for b in BRANDS_OFFICIAL:
-        if re.search(rf"\b{re.escape(b)}\b", title_norm):
-            return b
-    return None
-
-def _find_model(title_norm: str) -> Optional[str]:
-    # procura o modelo mais longo que aparecer (evita ambiguidade)
-    for m in KNOWN_MODELS:
-        if re.search(rf"\b{re.escape(m)}\b", title_norm):
-            return m
-    return None
-
-def infer_marca_modelo_from_title(title: str) -> tuple[str, str]:
-    if not title:
-        return "", ""
-    t_norm = _norm(title)
-
-    marca = _find_brand(t_norm) or ""
-    modelo = _find_model(t_norm) or ""
-
-    if marca and not modelo:
-        # fallback: pega o trecho depois da marca como modelo bruto
-        m = re.search(rf"\b{re.escape(_norm(marca))}\b(.*)$", t_norm)
-        if m:
-            modelo = m.group(1)
-            # limpa ano, km e ruídos
-            modelo = re.sub(r"\b(19[5-9]\d|20[0-4]\d)\b", " ", modelo)   # anos
-            modelo = re.sub(r"\b\d[\d\.\,]*\s*KM\b", " ", modelo)        # km
-            modelo = re.split(r"\b(RODOVIARIO|URBANO|MICRO\s*ONIBUS|ONIBUS|EXECUTIVO|COM\s+AR|AR\s+CONDICIONADO)\b",
-                              modelo, flags=re.IGNORECASE)[0]
-            modelo = re.sub(r"[\-\–\|·:]+", " ", modelo)
-            modelo = re.sub(r"\s+", " ", modelo).strip()
-
-    return (marca.title().replace("-Benz","-Benz").replace("Vw","VW"), modelo.title())
 
 async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
     page = await context.new_page()
@@ -473,45 +347,33 @@ async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
         for tent in range(1, RETRIES_PAGE + 1):
             try:
                 resp = await page.goto(link, timeout=TIMEOUT_MS, wait_until="domcontentloaded")
+                await fechar_modal_atributos_acessibilidade(page)
                 if not resp or (resp.status and resp.status >= 400):
                     await asyncio.sleep(0.8 * tent)
                     continue
 
-                await fechar_modal_atributos_acessibilidade(page)
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=5_000)
-                except:
-                    pass
-
                 await esperar_anuncio(page)
+                await fechar_modal_atributos_acessibilidade(page)
 
-                # ===== PREÇO =====
+                # PREÇO 
                 preco_val = await get_preco_estavel(page)
-                if isinstance(preco_val, (int, float)):
-                    preco_txt = f"R$ {int(preco_val):,}".replace(",", ".")
-                else:
-                    preco_txt = await get_text(page, SELETORES_PRECO)
+                preco_txt = f"R$ {int(preco_val):,}".replace(",", ".") if isinstance(preco_val, (int, float)) else await get_text(page, SELETORES_PRECO)
 
-                # ===== MARCA / MODELO pelo TÍTULO com fallback =====
-                title_txt = await get_text(page, SEL_TITLE)
-                marca_h, modelo_h = infer_marca_modelo_from_title(title_txt)
+                # MARCA / MODELO / ANO / KM
+                marca  = await get_text(page, SEL_MARCA)
+                modelo = await get_text(page, SEL_MODELO)
+                ano    = await get_text(page, SEL_ANO)
+                km     = await get_text(page, SEL_KM)
 
-                marca  = marca_h  or await get_text(page, SEL_MARCA)  or await get_text(page, XPATH_POR_LABEL["Marca"])
-                modelo = modelo_h or await get_text(page, SEL_MODELO) or await get_text(page, XPATH_POR_LABEL["Modelo"])
-
-                # ===== ANO / KM pelo SUBTÍTULO do HEADER com fallbacks =====
-                header_txt = await get_text(page, SEL_HEADER_SUB)
-                ano_h, km_h = parse_ano_km_from_header(header_txt)
-
-                ano = str(ano_h) if ano_h is not None else ""
-                km  = (f"{km_h} km") if km_h is not None else ""
-
+                if not marca:
+                    marca = await get_text(page, XPATH_POR_LABEL["Marca"])
+                if not modelo:
+                    modelo = await get_text(page, XPATH_POR_LABEL["Modelo"])
                 if not ano:
-                    ano = await get_text(page, SEL_ANO) or await get_text(page, XPATH_POR_LABEL["Ano"])
+                    ano = await get_text(page, XPATH_POR_LABEL["Ano"])
                 if not km:
-                    km  = await get_text(page, SEL_KM)  or await get_text(page, XPATH_POR_LABEL["Km"])
+                    km = await get_text(page, XPATH_POR_LABEL["Km"])
 
-                # ===== NORMALIZAÇÕES NUMÉRICAS =====
                 def parse_int_from(txt: str) -> Optional[int]:
                     if not txt:
                         return None
@@ -526,6 +388,7 @@ async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
                 def parse_km(txt: str) -> Optional[int]:
                     if not txt:
                         return None
+                    # remove 'km' e separadores
                     s = txt.lower().replace("km", "")
                     s = re.sub(r"[^\d]", "", s)
                     if not s:
