@@ -11,11 +11,8 @@ ARQUIVO_XLSX = "links_ml.xlsx"
 ARQUIVO_CSV  = "links_ml.csv"
 
 START_URLS = [
-    "https://lista.mercadolivre.com.br/veiculos/onibus/_YearRange_2002-0_NoIndex_True",
-    "https://lista.mercadolivre.com.br/veiculos/onibus-em-sao-paulo/_YearRange_2002-0_NoIndex_True",
-    "https://lista.mercadolivre.com.br/veiculos/onibus-em-parana/_YearRange_2002-0_NoIndex_True",
-    "https://lista.mercadolivre.com.br/veiculos/onibus-em-rio-grande-do-sul/_YearRange_2002-0_NoIndex_True",
-    "https://lista.mercadolivre.com.br/veiculos/onibus-em-minas-gerais/_YearRange_2002-0_NoIndex_True",
+    "https://lista.mercadolivre.com.br/veiculos/outros/carretas-em-minas-gerais/#applied_filter_id%3Dstate%26applied_filter_name%3DLocaliza%C3%A7%C3%A3o%26applied_filter_order%3D3%26applied_value_id%3DTUxCUE1JTlMxNTAyZA%26applied_value_name%3DMinas+Gerais%26applied_value_order%3D5%26applied_value_results%3D357%26is_custom%3Dfalse",
+    "https://lista.mercadolivre.com.br/veiculos/outros/carretas-em-parana/#applied_filter_id%3Dstate%26applied_filter_name%3DLocaliza%C3%A7%C3%A3o%26applied_filter_order%3D3%26applied_value_id%3DTUxCUFBBUkExODBlZA%26applied_value_name%3DParan%C3%A1%26applied_value_order%3D7%26applied_value_results%3D375%26is_custom%3Dfalse"
 ]
 
 # Login persistente

@@ -16,8 +16,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 ARQUIVO_EXCEL_LINKS = r"C:\Users\gabriel.vinicius\Documents\Vscode\MicroOnibus\links_ml.xlsx"
 
 # Saida
-ARQUIVO_PKL_DADOS   = "dados_ml.pkl"
-ARQUIVO_EXCEL_DADOS = "dados_ml.xlsx"
+ARQUIVO_PKL_DADOS   = "Implementos.pkl"
+ARQUIVO_EXCEL_DADOS = "Onibus.xlsx"
 ARQUIVO_CHECKPOINT  = "checkpoint_ml.pkl"
 
 USE_LOGIN = True  # use a sessão salva
@@ -65,23 +65,8 @@ SEL_MARCA = [
 SEL_MODELO = [
     r"xpath=//*[@id=':R2imsraacde:-value']", r"#\:R2imsraacde\:-value",
     r"#\:R2imsraacde\:", r"xpath=//*[@id=':R2imsraacde:']",
-    '//*[@id=":R2imsraac5e:"]'
-    "#\:R2imsraac5e\:"
-    
-]
-
-SEL_ANO = [
-    r"#\:R2j6sraac5e\:",           r"xpath=//*[@id=':R2j6sraac5e:']",
-    r"#\:R2j6sraac5e\:-value",     r"xpath=//*[@id=':R2j6sraac5e:-value']",
-
-    r"#\:R2j6sraacde\:",           r"xpath=//*[@id=':R2j6sraacde:']",
-    r"#\:R2j6sraacde\:-value",     r"xpath=//*[@id=':R2j6sraacde:-value']",
-
-    r"#\:R2iusraac5e\:",           r"xpath=//*[@id=':R2iusraac5e:']",
-    r"#\:R2iusraac5e\:-value",     r"xpath=//*[@id=':R2iusraac5e:-value']",
-
-    r"#\:R2iusraacde\:",           r"xpath=//*[@id=':R2iusraacde:']",
-    r"#\:R2iusraacde\:-value",     r"xpath=//*[@id=':R2iusraacde:-value']",
+    '//*[@id=":R2imsraac5e:"]',
+    "#\:R2imsraac5e\:" 
 ]
 
 SEL_KM = [
@@ -96,6 +81,34 @@ SEL_KM = [
 
     r"#\:R2jesraac5e\:-value",     r"xpath=//*[@id=':R2jesraac5e:-value']",
     r"#\:R2jesraac5e\:",           r"xpath=//*[@id=':R2jesraac5e:']",
+]
+
+SEL_ANO = [
+    r"xpath=//*[@id=':R19esraac5e:']",
+    r"#\:R19esraac5e\:",
+    r"#\:R19esraac5e\:-value",
+    r"xpath=//*[@id=':R19esraac5e:-value']",
+]
+
+# Capacidade de Carga (novo)
+SEL_CAPACIDADE_CARGA = [
+    r"xpath=//*[@id=':R19msraac5e:']",
+    r"#\:R19msraac5e\:",
+    r"#\:R19msraac5e\:-value",
+    r"xpath=//*[@id=':R19msraac5e:-value']",
+]
+
+# Uso (novo)
+SEL_USO = [
+    r"xpath=//*[@id=':R19usraac5e:']",
+    r"#\:R19usraac5e\:",
+    r"#\:R19usraac5e\:-value",
+    r"xpath=//*[@id=':R19usraac5e:-value']",
+]
+
+# Tipo (novo) – elemento de header (não input)
+SEL_TIPO = [
+    r"xpath=//*[@id='header']/div/div[2]/h1"
 ]
 
 XPATH_POR_LABEL = {
@@ -118,6 +131,18 @@ XPATH_POR_LABEL = {
         "xpath=//*[contains(normalize-space(.), 'Km') or contains(normalize-space(.), 'KM') or contains(normalize-space(.), 'Quilometragem')]/following::*[self::span or self::p or self::b][1]",
         "xpath=//th[contains(translate(., 'KMkm', 'KMKM'),'KM') or contains(translate(.,'quilometragem','QUILOMETRAGEM'),'QUILOMETRAGEM')]/following-sibling::td[1]",
         "xpath=//*[@role='table']//*[contains(translate(normalize-space(.), 'kmKM', 'KMKM'),'KM')]/following::*[1]"
+    ],
+    
+    "Capacidade de Carga": [
+        "xpath=//*[contains(normalize-space(.), 'Capacidade') and contains(normalize-space(.), 'Carga')]/following::*[self::span or self::p or self::b or self::td][1]",
+        "xpath=//th[contains(.,'Capacidade') and contains(.,'Carga')]/following-sibling::td[1]"
+    ],
+    "Uso": [
+        "xpath=//*[contains(normalize-space(.), 'Uso')]/following::*[self::span or self::p or self::b or self::td][1]",
+        "xpath=//th[contains(.,'Uso')]/following-sibling::td[1]"
+    ],
+    "Tipo": [
+        "xpath=//*[@id='header']/div/div[2]/h1"
     ],
 }
 
@@ -371,14 +396,23 @@ async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
 
                 # PREÇO 
                 preco_val = await get_preco_estavel(page)
-                preco_txt = f"R$ {int(preco_val):,}".replace(",", ".") if isinstance(preco_val, (int, float)) else await get_text(page, SELETORES_PRECO)
+                preco_txt = (
+                    f"R$ {int(preco_val):,}".replace(",", ".")
+                    if isinstance(preco_val, (int, float))
+                    else await get_text(page, SELETORES_PRECO)
+                )
 
-                # MARCA / MODELO / ANO / KM
-                marca  = await get_text(page, SEL_MARCA)
-                modelo = await get_text(page, SEL_MODELO)
-                ano    = await get_text(page, SEL_ANO)
-                km     = await get_text(page, SEL_KM)
+                # MARCA / MODELO / ANO / KM (com novos campos)
+                marca   = await get_text(page, SEL_MARCA)
+                modelo  = await get_text(page, SEL_MODELO)
+                ano     = await get_text(page, SEL_ANO)
+                km      = await get_text(page, SEL_KM)
 
+                capacidade_carga = await get_text(page, SEL_CAPACIDADE_CARGA)
+                uso              = await get_text(page, SEL_USO)
+                tipo             = await get_text(page, SEL_TIPO)
+
+                # fallbacks por label
                 if not marca:
                     marca = await get_text(page, XPATH_POR_LABEL["Marca"])
                 if not modelo:
@@ -387,31 +421,14 @@ async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
                     ano = await get_text(page, XPATH_POR_LABEL["Ano"])
                 if not km:
                     km = await get_text(page, XPATH_POR_LABEL["Km"])
+                if not capacidade_carga and "Capacidade de Carga" in XPATH_POR_LABEL:
+                    capacidade_carga = await get_text(page, XPATH_POR_LABEL["Capacidade de Carga"])
+                if not uso and "Uso" in XPATH_POR_LABEL:
+                    uso = await get_text(page, XPATH_POR_LABEL["Uso"])
+                if not tipo and "Tipo" in XPATH_POR_LABEL:
+                    tipo = await get_text(page, XPATH_POR_LABEL["Tipo"])
 
-                def parse_int_from(txt: str) -> Optional[int]:
-                    if not txt:
-                        return None
-                    m = re.search(r"\d{4}", txt)
-                    if m:
-                        try:
-                            return int(m.group(0))
-                        except:
-                            return None
-                    return None
-
-                def parse_km(txt: str) -> Optional[int]:
-                    if not txt:
-                        return None
-                    # remove 'km' e separadores
-                    s = txt.lower().replace("km", "")
-                    s = re.sub(r"[^\d]", "", s)
-                    if not s:
-                        return None
-                    try:
-                        return int(s)
-                    except:
-                        return None
-
+                # parse usando as funções globais já definidas
                 ano_val = parse_int_from(ano)
                 km_val  = parse_km(km)
 
@@ -425,6 +442,10 @@ async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
                     "Ano": ano_val if ano_val is not None else "",
                     "Km_txt": km,
                     "Km": km_val if km_val is not None else "",
+                    # novos campos
+                    "CapacidadeCarga_txt": capacidade_carga,
+                    "Uso": uso,
+                    "Tipo": tipo,
                 }
 
                 return dados

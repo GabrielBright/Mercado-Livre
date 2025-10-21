@@ -5,6 +5,7 @@ import asyncio
 import logging
 import pandas as pd
 import unicodedata
+from typing import Optional, Tuple
 from tqdm import tqdm
 from time import time
 from typing import List, Dict, Any, Optional
@@ -14,21 +15,21 @@ sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Entrada
-ARQUIVO_EXCEL_LINKS = r"C:\Users\gabriel.vinicius\Documents\Vscode\MicroOnibus\links_ml - Copia (2).xlsx"
+ARQUIVO_EXCEL_LINKS = r"C:\Users\gabriel.vinicius\Documents\Vscode\MicroOnibus\Faltando.xlsx"
 
 # Saida
-ARQUIVO_PKL_DADOS   = "dados_ml.pkl"
-ARQUIVO_EXCEL_DADOS = "dados_ml.xlsx"
+ARQUIVO_PKL_DADOS   = "dadosss_ml.pkl"
+ARQUIVO_EXCEL_DADOS = "dadosasdas_ml.xlsx"
 ARQUIVO_CHECKPOINT  = "checkpoint_ml.pkl"
 
 USE_LOGIN = True  # use a sessão salva
 STORAGE_STATE = r"C:\Users\gabriel.vinicius\Documents\Vscode\MicroOnibus\ml_state.json"
 
-CHECKPOINT_EVERY = 300
+CHECKPOINT_EVERY = 125
 
-TIMEOUT_MS      = 120_000
+TIMEOUT_MS      = 100_000
 RETRIES_PAGE    = 2
-MAX_CONCURRENT  = 8 
+MAX_CONCURRENT  = 2
 
 async def get_preco_estavel(page) -> Optional[float]:
     # tenta meta itemprop=price (varia entre ML países, mas ajuda)
@@ -417,6 +418,38 @@ KNOWN_MODELS = [
 KNOWN_MODELS = sorted(set(m.upper() for m in KNOWN_MODELS), key=len, reverse=True)
 BRANDS_OFFICIAL = sorted(set(BRANDS_OFFICIAL), key=len, reverse=True)
 
+GENERIC_MODEL_WORDS = {
+    "onibus", "ônibus", "microonibus", "micro-ônibus", "micro ônibus",
+    "micro ônibus", "escolar", "ônibus escolar", "onibus escolar"
+}
+
+# Marcas/chassi (parcial; ajuste como quiser)
+MARCAS_KNOWN = {
+    "marcopolo","volkswagen","mercedes-benz","mercedes","scania","volvo","iveco","agrale","renault",
+    "fiat","citroen","peugeot","higer","ankai","byd","hyundai"
+}
+
+# Carrocerias/linhas comuns (útil para achar modelo no título)
+CARROCERIAS = {
+    "paradiso","ideale","senior","volare","foz","apache","irizar","gg7","ddg7","dd","dd g7",
+    "neo","neobus","busscar","comil","caio","induscar","italbus","vettura","mascarello","masca"
+}
+
+# Padrões frequentes de modelo/linha
+MODEL_PATTERNS = [
+    r"paradiso\s*\d{3,4}\s*(?:dd|ddg7|g7)?",
+    r"ideale\s*\d{3}",
+    r"senior(?:\s+g\d+)?",
+    r"volare\s*[a-z]?\d{1,2}\w*",
+    r"foz\s*super",
+    r"apache\s*\w+",
+    r"k\d{3}",                # Scania K310, K380...
+    r"of\s*\d{3,4}",         # Mercedes OF 1519...
+    r"\d{2}\.\d{3}",         # 15.190 etc.
+    r"daily\s*\d{2,3}",      # Daily 45, 50, 55...
+    r"sprinter(?:\s+\w+)?"
+]
+
 def _norm(s: str) -> str:
     if not s:
         return ""
@@ -425,6 +458,19 @@ def _norm(s: str) -> str:
     s = re.sub(r"[^0-9A-Za-z\s\-\.\_/]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s.upper()
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s or "").strip()
+
+def _slug(s: str) -> str:
+    s = _norm(s).lower()
+    s = s.replace("ô", "o").replace("ó","o").replace("ã","a").replace("ç","c").replace("é","e").replace("í","i").replace("á","a").replace("ú","u")
+    return s
+
+def is_generic_model(modelo: str) -> bool:
+    if not modelo: return True
+    sl = _slug(modelo)
+    return (sl in GENERIC_MODEL_WORDS) or (sl == "")
 
 def _find_brand(title_norm: str) -> Optional[str]:
     # 1) tenta aliases
@@ -467,6 +513,92 @@ def infer_marca_modelo_from_title(title: str) -> tuple[str, str]:
 
     return (marca.title().replace("-Benz","-Benz").replace("Vw","VW"), modelo.title())
 
+def infer_model_from_title(title: str, marca: str) -> Optional[str]:
+    t = _norm(title)
+    if not t:
+        return None
+    tl = _slug(t)
+
+    # 1) padrões conhecidos
+    for pat in MODEL_PATTERNS:
+        m = re.search(pat, tl, flags=re.I)
+        if m:
+            # retorna como aparece no título (recorta no original para manter caixa)
+            start, end = m.span()
+            return t[start:end].strip().upper()
+
+    # 2) se tiver a marca no título, pega o "chunk" à frente
+    marca_sl = _slug(marca or "")
+    if marca_sl:
+        # encontra primeira ocorrência da marca (ou marcas similares) no título
+        tokens = t.split()
+        tl_tokens = tl.split()
+        for i, tok in enumerate(tl_tokens):
+            if marca_sl in tok or (marca_sl == "mercedes-benz" and ("mercedes" in tok or "mbb" in tok)):
+                # pega até 5 tokens à frente, parando em separadores comuns
+                j = i + 1
+                collected = []
+                stop_words = {"usado","seminovo","motor","dianteiro","traseiro","mbb","vw","volkswagen","mercedes","mercedes-benz"}
+                while j < len(tokens) and len(collected) < 6:
+                    raw = tokens[j]
+                    low = tl_tokens[j]
+                    if low in stop_words or re.match(r"\d{4}$", low) or "km" in low:
+                        break
+                    # ignora palavras genéricas
+                    if _slug(raw) in GENERIC_MODEL_WORDS:
+                        j += 1
+                        continue
+                    collected.append(raw)
+                    j += 1
+                cand = " ".join(collected).strip()
+                cand = re.sub(r"[·\|\-–]+.*$", "", cand).strip()  # corta depois de separadores
+                if len(cand) >= 3:
+                    return cand.upper()
+
+    # 3) fallback: pega primeiro bloco com letras+números que pareça nome de linha
+    m2 = re.search(r"\b([A-Z][A-Za-z]+(?:\s+[A-Z0-9][A-Za-z0-9]+){0,3})\b", t)
+    if m2:
+        cand = m2.group(1).strip()
+        if len(cand) >= 3 and _slug(cand) not in GENERIC_MODEL_WORDS:
+            return cand.upper()
+
+    return None
+
+def refine_marca_modelo(marca: str, modelo: str, title: str) -> Tuple[str, str]:
+    m = _norm(marca)
+    md = _norm(modelo)
+    t = _norm(title)
+
+    # se modelo genérico -> tentar inferir
+    if is_generic_model(md):
+        inferred = infer_model_from_title(t, m)
+        if inferred:
+            md = inferred
+
+    # se ainda genérico, tenta pegar chassi numérico comum (15.190, OF 1519, etc.)
+    if is_generic_model(md):
+        mnum = re.search(r"\b(\d{2}\.\d{3}|OF\s*\d{3,4}|K\d{3})\b", t, flags=re.I)
+        if mnum:
+            md = mnum.group(1).upper()
+
+    # se título mencionar carroceria (CAIO, COMIL, BUSSCAR, NEOBUS, etc.), e for diferente da marca, junta
+    tl = _slug(t)
+    carroceria_hit = None
+    for c in CARROCERIAS:
+        if re.search(rf"\b{re.escape(c)}\b", tl):
+            carroceria_hit = c.upper()
+            break
+    if carroceria_hit and _slug(m) not in {carroceria_hit.lower(), "mascarello", "masca"}:
+        # se modelo não contém já a carroceria, prefixa
+        if carroceria_hit not in md:
+            md = f"{carroceria_hit} {md}".strip()
+
+    # tira 'ONIBUS' remanescente do modelo
+    if _slug(md) in GENERIC_MODEL_WORDS:
+        md = ""
+
+    return (m, md)
+
 async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
     page = await context.new_page()
     try:
@@ -498,6 +630,8 @@ async def extrair_anuncio(context, link: str) -> Optional[Dict[str, Any]]:
 
                 marca  = marca_h  or await get_text(page, SEL_MARCA)  or await get_text(page, XPATH_POR_LABEL["Marca"])
                 modelo = modelo_h or await get_text(page, SEL_MODELO) or await get_text(page, XPATH_POR_LABEL["Modelo"])
+                # >>> Refinar marca/modelo quando vier "Ônibus" etc.
+                marca, modelo = refine_marca_modelo(marca, modelo, title_txt)
 
                 # ===== ANO / KM pelo SUBTÍTULO do HEADER com fallbacks =====
                 header_txt = await get_text(page, SEL_HEADER_SUB)
