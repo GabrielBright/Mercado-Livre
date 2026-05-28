@@ -6,7 +6,7 @@ import re
 import pandas as pd
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
-LIMITE_TOTAL = 3678
+LIMITE_TOTAL = 5000
 ARQUIVO_XLSX = "links_ml.xlsx"
 ARQUIVO_CSV  = "links_ml.csv"
 
@@ -16,6 +16,7 @@ START_URLS = [
     "https://lista.mercadolivre.com.br/veiculos/onibus-em-parana/_YearRange_2002-0_NoIndex_True",
     "https://lista.mercadolivre.com.br/veiculos/onibus-em-rio-grande-do-sul/_YearRange_2002-0_NoIndex_True",
     "https://lista.mercadolivre.com.br/veiculos/onibus-em-minas-gerais/_YearRange_2002-0_NoIndex_True",
+    "https://lista.mercadolivre.com.br/veiculos/onibus/diesel/_YearRange_2002-0_NoIndex_True#applied_filter_id%3DFUEL_TYPE%26applied_filter_name%3DTipo+de+combust%C3%ADvel%26applied_filter_order%3D5%26applied_value_id%3D60406%26applied_value_name%3DDiesel%26applied_value_order%3D1%26applied_value_results%3D2829%26is_custom%3Dfalse"
 ]
 
 # Login persistente
